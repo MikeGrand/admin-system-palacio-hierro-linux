@@ -1,0 +1,1072 @@
+#!/bin/bash
+
+# SCRIPT DE ADMINISTRACIÓN PARA PALACIO DE HIERRO
+# Versión: 3.0
+# Descripción: Sistema integral de administración con estructura organizada de respaldos
+
+#_____________________________________________________________________
+#
+#               C O N F I G U R A C I O N
+#       E S T R U C T U R A L  D E  L A S  D I R E C C I O N E S
+#		P A L A C I O  D E  H I E R R O
+#_____________________________________________________________________
+
+TIENDA="Palacio_de_Hierro"
+DEPARTAMENTO="Ventas" #Ventas/Inventario/Sistemas
+DOMINIO="ph.local"
+GRUPO_BASE="ph_${DEPARTAMENTO,,}"
+DIR_BASE="/ph/${DEPARTAMENTO,,}"
+LOG_FILE="/var/log/ph_admin.log"
+BACKUP_DIR="/backups/ph_${DEPARTAMENTO,,}"
+MYSQL_CONFIG="/root/.my.cnf"
+
+USUARIOS_DIR="/ph/Usuarios"
+USUARIOS_FILE="$USUARIOS_DIR/usuarios.txt"
+
+# VERIFICACIÓN DE ROOT
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Acceso denegado. Se requiere usuario root."
+    exit 1
+fi
+
+#_______________________________________________________________________
+#
+#			F U N C I O N E S  B A S I C A S
+#_______________________________________________________________________
+
+inicializar_entorno() {
+    [ ! -d "$BACKUP_DIR" ] && mkdir -p "$BACKUP_DIR"
+    [ ! -d "$DIR_BASE" ] && mkdir -p "$DIR_BASE"
+     [ ! -d "$USUARIOS_DIR" ] && mkdir -p "$USUARIOS_DIR"
+    touch "$LOG_FILE"
+    touch "$USUARIOS_FILE"
+}
+
+registrar_log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$TIENDA-$DEPARTAMENTO] $1" >> "$LOG_FILE"
+}
+
+
+crear_grupos_ph() {
+    for grupo in ph_ventas ph_admin ph_soporte; do
+        if ! getent group "$grupo" >/dev/null; then
+            groupadd "$grupo"
+            registrar_log "Grupo $grupo creado automáticamente"
+        fi
+    done
+}
+
+mostrar_encabezado() {
+    clear
+    echo "_________________________________________________________"
+    echo ""
+    echo "  PALACIO DE HIERRO - ADMINISTRACIÓN DE RED"
+    echo "  Departamento: ${DEPARTAMENTO^^}"
+    echo "_________________________________________________________"
+    echo ""
+}
+
+#_______________________________________________________________________
+#
+# 		GESTIÓN DE USUARIOS (Adaptado para retail)
+#________________________________________________________________________
+
+alta_usuario() {
+    mostrar_encabezado
+    echo "--- ALTA DE USUARIO ---"
+    read -p "Nombre de usuario (ej: vendedorXX): " usuario
+
+    if id "$usuario" &>/dev/null; then
+        echo "ERROR: El usuario ya existe"
+        registrar_log "Intento de alta de usuario existente: $usuario"
+        return 1
+    fi
+
+    crear_grupos_ph
+
+    read -p "Nombre completo: " nombre
+    read -p "Puesto (vendedor/cajero/gerente/sistemas): " puesto
+    read -p "Fecha caducidad (YYYY-MM-DD): " fecha_cad
+
+ # PRIMERO CREA EL USUARIO SIN GRUPOS ADICIONALES
+    useradd -m -c "$nombre - $puesto" -s "/bin/bash" "$usuario" || {
+        echo "ERROR: No se pudo crear el usuario"
+        registrar_log "Error al crear usuario: $usuario"
+        return 1
+    }
+
+ # LUEGO AGREGA A LOS GRUPOS CORRESPONDIENTES
+    case "$puesto" in
+        "vendedor"|"cajero")
+            usermod -aG "ph_ventas" "$usuario"
+            ;;
+        "gerente")
+            usermod -aG "ph_admin,ph_ventas" "$usuario"
+            ;;
+        "sistemas")
+            usermod -aG "ph_admin,ph_soporte" "$usuario"
+            ;;
+    esac
+
+    [ -n "$fecha_cad" ] && chage -E "$fecha_cad" "$usuario"
+
+    echo "Configurando contraseña:"
+    until passwd "$usuario"; do
+        echo "Intenta nuevamente..."
+    done
+
+    registrar_log "Alta usuario exitosa: $usuario - $puesto"
+    echo "✔ Usuario $usuario creado correctamente para puesto $puesto"
+}
+
+baja_usuario() {
+    mostrar_encabezado
+    echo "--- BAJA DE USUARIO ---"
+    read -p "Nombre de usuario: " usuario
+
+    if ! id "$usuario" &>/dev/null; then
+        echo "ERROR: Usuario no existe"
+        registrar_log "Intento de baja de usuario inexistente: $usuario"
+        return 1
+    fi
+
+    read -p "¿Eliminar directorio home? (s/n): " eliminar_home
+    [ "$eliminar_home" = "s" ] && opcion="-r" || opcion=""
+
+    userdel $opcion "$usuario"
+    registrar_log "Baja usuario: $usuario"
+    echo "✔ Usuario $usuario eliminado"
+}
+
+consulta_usuario() {
+    mostrar_encabezado
+    echo "--- CONSULTA DE USUARIO ---"
+    read -p "Nombre de usuario: " usuario
+
+    if id "$usuario" &>/dev/null; then
+        echo -e "\nInformación:"
+        finger "$usuario"
+        echo -e "\nGrupos:"
+        groups "$usuario"
+        echo -e "\nCaducidad:"
+        chage -l "$usuario" | grep "Account expires"
+	echo -e "\nProcesos (vivos):"
+		if ps -u "$usuario" -o pid,%cpu,%mem,cmd --no-headers | grep -v "ps -u"; then
+    		   ps -u "$usuario" -o pid,%cpu,%mem,cmd
+		else
+    		   echo " - El usuario no tiene procesos activos"
+   		   echo " - Último login: $(last -n 1 "$usuario" | head -1 | awk '{print $4" "$5" "$6" "$7}')"
+		fi
+    else
+        echo "ERROR: Usuario no existe"
+    fi
+}
+
+modificar_usuario() {
+    mostrar_encabezado
+    echo "--- MODIFICACIÓN DE USUARIO ---"
+    read -p "Nombre de usuario: " usuario
+
+    if ! id "$usuario" &>/dev/null; then
+        echo "ERROR: Usuario no existe"
+        registrar_log "Intento de modificar usuario inexistente: $usuario"
+        return 1
+    fi
+    echo "1. Cambiar fecha caducidad"
+    echo "2. Cambiar directorio home"
+    echo "3. Bloquear/desbloquear cuenta"
+    echo "4. Cambiar grupo principal"
+    echo "5. Cambiar puesto"
+    read -p "Seleccione opción [1-5]: " opcion
+
+    case $opcion in
+        1)
+            read -p "Nueva fecha (YYYY-MM-DD): " fecha
+            chage -E "$fecha" "$usuario"
+            registrar_log "Modificado fecha caducidad para $usuario: $fecha"
+            ;;
+        2)
+            read -p "Nuevo directorio: " home
+            usermod -d "$home" -m "$usuario"
+            registrar_log "Modificado directorio home para $usuario: $home"
+            ;;
+        3)
+            passwd -S "$usuario" | grep -q "locked" && estado="desbloquear" || estado="bloquear"
+            passwd -$estado "$usuario"
+            registrar_log "Cuenta $usuario $estado"
+            ;;
+        4)
+            read -p "Nuevo grupo principal: " grupo
+            usermod -g "$grupo" "$usuario"
+            registrar_log "Cambiado grupo principal para $usuario: $grupo"
+            ;;
+        5)
+            read -p "Nuevo puesto: " puesto
+            usermod -c "$(grep "^$usuario:" /etc/passwd | cut -d: -f5 | cut -d- -f1) - $puesto" "$usuario"
+            registrar_log "Cambiado puesto para $usuario: $puesto"
+            ;;
+        *)
+            echo "Opción inválida"
+            ;;
+    esac
+
+    echo "✔ Modificación completada"
+}
+
+#_____________________________________________________________________
+#
+# 				GESTIÓN DE GRUPOS
+#_____________________________________________________________________
+
+alta_grupo() {
+    mostrar_encabezado
+    echo "--- ALTA DE GRUPO ---"
+    read -p "Nombre del grupo (ej: ph_ventas): " grupo
+
+    if getent group "$grupo" >/dev/null; then
+        echo "ERROR: El grupo ya existe"
+        registrar_log "Intento de crear grupo existente: $grupo"
+        return 1
+    fi
+
+    groupadd "$grupo"
+    registrar_log "Alta grupo: $grupo"
+    echo "✔ Grupo $grupo creado"
+}
+
+baja_grupo() {
+    mostrar_encabezado
+    echo "--- BAJA DE GRUPO ---"
+    read -p "Nombre del grupo: " grupo
+
+    if ! getent group "$grupo" >/dev/null; then
+        echo "ERROR: Grupo no existe"
+        registrar_log "Intento de eliminar grupo inexistente: $grupo"
+        return 1
+    fi
+
+    groupdel "$grupo"
+    registrar_log "Baja grupo: $grupo"
+    echo "✔ Grupo $grupo eliminado"
+}
+
+consulta_grupo() {
+    mostrar_encabezado
+    echo "--- CONSULTA DE GRUPO ---"
+    read -p "Nombre del grupo: " grupo
+
+    if getent group "$grupo" >/dev/null; then
+        echo -e "\nInformación:"
+        grep "^$grupo:" /etc/group
+        echo -e "\nMiembros:"
+        grep "^$grupo:" /etc/group | cut -d: -f4
+    else
+        echo "ERROR: Grupo no existe"
+    fi
+}
+
+modificar_grupo() {
+    mostrar_encabezado
+    echo "--- MODIFICACIÓN DE GRUPO ---"
+    read -p "Nombre del grupo: " grupo
+
+    if ! getent group "$grupo" >/dev/null; then
+        echo "ERROR: Grupo no existe"
+        registrar_log "Intento de modificar grupo inexistente: $grupo"
+        return 1
+    fi
+
+    echo "1. Agregar usuario"
+    echo "2. Quitar usuario"
+    echo "3. Cambiar nombre"
+    read -p "Seleccione opción [1-3]: " opcion
+
+    case $opcion in
+        1)
+            read -p "Usuario a agregar: " usuario
+            usermod -aG "$grupo" "$usuario"
+            registrar_log "Usuario $usuario agregado al grupo $grupo"
+            ;;
+        2)
+            read -p "Usuario a quitar: " usuario
+            gpasswd -d "$usuario" "$grupo"
+            registrar_log "Usuario $usuario quitado del grupo $grupo"
+            ;;
+        3)
+            read -p "Nuevo nombre: " nuevo
+            groupmod -n "$nuevo" "$grupo"
+            registrar_log "Grupo $grupo renombrado a $nuevo"
+            ;;
+        *)
+            echo "Opción inválida"
+            ;;
+    esac
+
+    echo "✔ Modificación completada"
+}
+#_____________________________________________________________________________
+#
+#			 AUTOMATIZACIÓN DE TAREAS
+#_____________________________________________________________________________
+
+gestion_cron() {
+    while true; do
+        mostrar_encabezado
+        echo "--- GESTIÓN DE CRON ---"
+        echo "1. Programar respaldo diario (automatico 2AM)"
+        echo "2. Programar verificación de inventario (automatico 3AM)"
+        echo "3. Programar reporte de ventas (automatico 10PM)"
+        echo "4. Programacion manual personalizada"
+	echo "5. Ver tareas programadas"
+        echo "6. Eliminar tarea"
+        echo "7. Volver"
+        read -p "Seleccione [1-7]: " opcion
+
+	case $opcion in
+            1)
+                (crontab -l 2>/dev/null; echo "0 2 * * * /usr/bin/tar -czf $BACKUP_DIR/respaldo_$(date +\%Y\%m\%d).tar.gz $DIR_BASE") | crontab -
+                echo "Respaldo diario programado a las 2 AM ✔ "
+                registrar_log "Programado respaldo diario automatico."
+                ;;
+            2)
+                (crontab -l 2>/dev/null; echo "0 3 * * * /usr/bin/ph_inventario.sh") | crontab -
+                echo "Verificación de inventario programada a las 3 AM ✔ "
+                registrar_log "Programado verificación de inventario automatico."
+                ;;
+            3)
+                (crontab -l 2>/dev/null; echo "0 22 * * * /usr/bin/ph_reportes.sh") | crontab -
+                echo "Reporte de ventas programado a las 10 PM ✔ "
+                registrar_log "Programado reporte de ventas automatico."
+                ;;
+
+	    4)
+		programacion_manual_cron
+                ;;
+	    5)
+                echo -e "\nTareas programadas:"
+                crontab -l
+                ;;
+            6)
+                crontab -l || { echo "No hay tareas"; continue; }
+                read -p "Número de línea a eliminar: " linea
+                crontab -l | sed "${linea}d" | crontab -
+                echo "Tarea eliminada"
+                registrar_log "Eliminada tarea cron línea $linea"
+                ;;
+            7) break ;;
+            *) echo "Opción inválida" 
+            ;;
+        esac
+	done
+}
+
+programacion_manual_cron() {
+    while true; do
+        mostrar_encabezado
+        echo "--- PROGRAMACIÓN MANUAL CRON ---"
+        echo "1. Respaldo diario personalizado"
+        echo "2. Verificación de inventario personalizada"
+        echo "3. Reporte de ventas personalizado"
+        echo "4. Volver"
+        read -p "Seleccione [1-4]: " opcion_manual
+
+        case $opcion_manual in
+            1)
+                echo "Ejemplo formato: 30 14 * * * (14:30 horas diario)"
+                read -p "Ingrese tiempo cron: " tiempo_cron
+                (crontab -l 2>/dev/null; echo "$tiempo_cron /usr/bin/tar -czf $BACKUP_DIR/respaldo_manual_$(date +\%Y\%m\%d).tar.gz $DIR_BASE") | crontab -
+                echo "Respaldo programado manualmente ✔ "
+                registrar_log "Respaldo manual cron: $tiempo_cron"
+                ;;
+            2)
+                echo "Ejemplo formato: 15 4 * * 1 (Lunes 4:15 AM)"
+                read -p "Ingrese tiempo cron: " tiempo_cron
+                (crontab -l 2>/dev/null; echo "$tiempo_cron /usr/bin/ph_inventario.sh --full") | crontab -
+                echo "Inventario programado manualmente ✔"
+                registrar_log "Inventario manual cron: $tiempo_cron"
+                ;;
+            3)
+                echo "Ejemplo formato: 45 21 * * 1-5 (L-V 9:45 PM)"
+                read -p "Ingrese tiempo cron: " tiempo_cron
+                (crontab -l 2>/dev/null; echo "$tiempo_cron /usr/bin/ph_reportes.sh --detallado") | crontab -
+                echo "Reporte de ventas programado manualmente ✔"
+                registrar_log "Reporte manual cron: $tiempo_cron"
+                ;;
+            4) break ;;
+            *) echo "Opción inválida, intentelo nuevamente..." ;;
+        esac
+        read -p "Presione Enter para continuar..."
+    done
+}
+
+
+gestion_at() {
+    while true; do
+        mostrar_encabezado
+        echo "--- GESTIÓN DE AT ---"
+        echo "1. Programar respaldo urgente (preconfigurado)"
+        echo "2. Programar reinicio de servicios (preconfigurado)"
+        echo "3. Programar actualización (preconfigurado)"
+        echo "4. Programacion manual personalizada"
+	echo "5. Ver tareas pendientes"
+        echo "6. Cancelar tarea"
+        echo "7. Volver"
+        read -p "Seleccione [1-7]: " opcion
+
+	case $opcion in
+            1)
+                read -p "Hora (HH:MM): " hora
+                echo "/usr/bin/tar -czf $BACKUP_DIR/respaldo_urgente_$(date +\%Y\%m\%d_\%H\%M).tar.gz $DIR_BASE" | at "$hora"
+                echo "Respaldo programado ✔ "
+                registrar_log "Programado respaldo urgente para $hora"
+                ;;
+            2)
+                read -p "Hora (HH:MM): " hora
+                echo "systemctl restart ph_servicios" | at "$hora"
+                echo "Reinicio programado ✔ "
+                registrar_log "Programado reinicio para $hora"
+                ;;
+            3)
+                read -p "Hora (HH:MM): " hora
+                echo "apt-get update && apt-get upgrade -y" | at "$hora"
+                echo "Actualización programada ✔ "
+                registrar_log "Programado actualización para $hora"
+                ;;
+            4)
+		programacion_manual_at
+                ;;
+	    5)
+                echo -e "\nTareas pendientes:"
+                atq || echo "No hay tareas programadas"
+                ;;
+            6)
+                atq || { echo "No hay tareas"; continue; }
+                read -p "ID de tarea a cancelar: " id
+                atrm "$id"
+                echo "Tarea cancelada"
+                registrar_log "Cancelada tarea at ID $id"
+                ;;
+            7) break ;;
+            *) echo "Opción inválida, intentelo nuevamente..." ;;
+        esac
+        read -p "Presione Enter para continuar..."
+    done
+}
+
+programacion_manual_at() {
+    while true; do
+        mostrar_encabezado
+        echo "--- PROGRAMACIÓN MANUAL AT ---"
+        echo "1. Respaldo urgente personalizado"
+        echo "2. Reinicio de servicios personalizado"
+        echo "3. Actualización personalizada"
+        echo "4. Comando completamente personalizado"
+        echo "5. Volver"
+        read -p "Seleccione [1-5]: " opcion_manual
+
+        case $opcion_manual in
+            1)
+                read -p "Hora (HH:MM): " hora
+                read -p "Nombre del respaldo: " nombre
+                echo "/usr/bin/tar -czf $BACKUP_DIR/${nombre}.tar.gz $DIR_BASE" | at "$hora"
+                echo "✔ Respaldo '$nombre' programado para $hora"
+                registrar_log "Respaldo manual AT: $nombre a las $hora"
+                ;;
+            2)
+                read -p "Hora (HH:MM): " hora
+                read -p "Servicios a reiniciar (ej: ph_pos ph_inventario): " servicios
+                echo "systemctl restart $servicios" | at "$hora"
+                echo "✔ Reinicio de $servicios programado para $hora"
+                registrar_log "Reinicio manual AT: $servicios a las $hora"
+                ;;
+            3)
+                read -p "Hora (HH:MM): " hora
+                read -p "Paquetes específicos (dejar vacío para todos): " paquetes
+                [ -z "$paquetes" ] && cmd="apt-get upgrade -y" || cmd="apt-get install $paquetes -y"
+                echo "apt-get update && $cmd" | at "$hora"
+                echo "✔ Actualización programada para $hora"
+                registrar_log "Actualización manual AT: $paquetes a las $hora"
+                ;;
+            4)
+                read -p "Hora (HH:MM): " hora
+                read -p "Comando completo a ejecutar: " comando
+                echo "$comando" | at "$hora"
+                echo "✔ Comando personalizado programado para $hora"
+                registrar_log "Comando AT: '$comando' a las $hora"
+                ;;
+            5) break ;;
+            *) echo " Opción inválida, intentelo nuevamente..." ;;
+        esac
+        read -p "Presione Enter para continuar..."
+    done
+}
+
+
+#___________________________________________________________________________
+#
+# 			RESPALDO DE INFORMACIÓN
+#___________________________________________________________________________
+
+respaldo_rsync() {
+    mostrar_encabezado
+    echo "--- RESPALDO CON RSYNC ---"
+    read -p "Ruta destino: " destino
+    [ -z "$destino" ] && destino="$BACKUP_DIR/rsync"
+
+    mkdir -p "$destino"
+    rsync -avz "$DIR_BASE/" "$destino/"
+
+    registrar_log "Respaldo rsync a $destino"
+    echo "Respaldo completado... ✔"
+}
+
+respaldo_tar() {
+    mostrar_encabezado
+    echo "--- RESPALDO COMPRIMIDO ---"
+    echo "1. gzip (rápido)"
+    echo "2. bzip2 (balanceado)"
+    echo "3. xz (máxima compresión)"
+    read -p "Seleccione [1-3]: " opcion
+
+    case $opcion in
+        1) cmd="tar -czf"; ext="tgz";;
+        2) cmd="tar -cjf"; ext="tbz2";;
+        3) cmd="tar -cJf"; ext="txz";;
+        *) echo "Opción inválida"; return;;
+    esac
+
+    archivo="$BACKUP_DIR/respaldo_$(date +%Y%m%d_%H%M).$ext"
+    $cmd "$archivo" "$DIR_BASE"
+
+    registrar_log "Respaldo tar ($ext) a $archivo"
+    echo "Respaldo completado: $archivo ✔ "
+}
+
+dump_restore() {
+    # Creo el directo rio si no existe
+    [ -d "/backups" ] || sudo mkdir -p /backups && sudo chown $USER /backups
+
+    mostrar_encabezado
+    echo "--- DUMP/RESTORE ---"
+    echo "1. Crear dump de base de datos"
+    echo "2. Restaurar dump"
+    read -p "Seleccione [1-2]: " opcion
+
+    case $opcion in
+        1)
+	    echo "Bases de datos disponibles:"
+            mysql -u root -p -e "SHOW DATABASES;" | grep -v "Database\|information_schema\|mysql\|performance_schema\|sys"
+            read -p "Nombre de la base de datos: " db
+
+            # Validar que la BD existe
+            if ! mysql -u root -p -e "USE $db" 2>/dev/null; then
+                echo "Error: La base de datos $db no existe"
+                read -p "¿Desea crearla? (s/n): " crear
+                [ "$crear" = "s" ] && mysql -u root -p -e "CREATE DATABASE $db"
+                return 1
+            fi
+
+            archivo="/backups/respaldo_${db}_$(date +%Y%m%d).sql"
+            mysqldump -u root -p "$db" > "$archivo" && {
+                echo "✔ Dump creado: $archivo"
+                ls -lh "$archivo"
+            } || {
+                echo "Error al crear dump"
+                return 1
+            }
+            ;;
+        2)
+	    echo "Archivos de respaldo disponibles:"
+            ls -lh /backups/respaldo_ph_*.sql 2>/dev/null || {
+                echo "No hay archivos de respaldo en /backups"
+                return 1
+            }
+
+            read -p "Archivo de entrada: " archivo
+            [ -f "$archivo" ] || {
+                echo "Error: $archivo no existe"
+                return 1
+            }
+
+            read -p "Nombre de la base de datos: " db
+            mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS $db" && \
+            mysql -u root -p "$db" < "$archivo" && {
+                echo "✔ Base de datos $db restaurada correctamente"
+                mysql -u root -p -e "SHOW TABLES FROM $db"
+            } || {
+                echo "Error al restaurar"
+                return 1
+            }
+            ;;
+        *)
+            echo "Opción inválida"
+            ;;
+    esac
+}
+
+#__________________________________________________________________________
+#
+# 				SEGURIDAD Y MONITOREO
+#__________________________________________________________________________
+
+ configurar_nagios() {
+    mostrar_encabezado
+    echo "--- CONFIGURACIÓN DE NAGIOS 4 ---"
+    echo "1. Configurar monitoreo de cajas"
+    echo "2. Configurar monitoreo de servidores"
+    echo "3. Abrir interfaz web (automático)"
+    echo "4. Reiniciar servicios"
+    echo "5. Volver"
+    read -p "Seleccione [1-5]: " opcion
+
+    case $opcion in
+        1)
+            # Configuración existente para cajas (sin cambios)
+            sudo tee /etc/nagios/conf.d/ph_cajas.cfg >/dev/null <<'EOF'
+define host {
+    use                     generic-host
+    host_name               ph_caja_01
+    alias                   Caja Registradora 01
+    address                 192.168.10.100
+    check_command           check_ping!100.0,20%!500.0,60%
+}
+EOF
+            echo "✔ Configuración para cajas agregada"
+            registrar_log "Configuración Nagios: cajas registradoras"
+            
+            # Validación de configuración (nuevo)
+            echo -e "\nValidando sintaxis..."
+            sudo nagios -v /etc/nagios/nagios.cfg | grep -i "Things look okay" || {
+                echo "⚠️  Error en configuración. Revisa /etc/nagios/conf.d/"
+                return 1
+            }
+            ;;
+        2)
+            # Configuración existente para servidores (sin cambios)
+            sudo tee /etc/nagios/conf.d/ph_servidores.cfg >/dev/null <<'EOF'
+define host {
+    use                     generic-host
+    host_name               ph_servidor_01
+    alias                   Servidor Primario
+    address                 192.168.20.1
+    check_command           check_load!5.0!4.0!3.0
+}
+EOF
+            echo "✔ Configuración para servidores agregada"
+            registrar_log "Configuración Nagios: servidores"
+            ;;
+        3)
+            # --- MEJORA PRINCIPAL (Apertura automática) ---
+            IP=$(hostname -I | awk '{print $1}')
+            URL="http://$IP/nagios"
+            
+            # 1. Verifica si Nagios está activo
+            if ! systemctl is-active --quiet nagios; then
+                echo "⚠️  Nagios no está corriendo. Iniciando servicio..."
+                sudo systemctl start nagios
+                sleep 3
+            fi
+
+            # 2. Muestra credenciales (formato legible)
+            echo -e "\n🌐 \033[1;36mAcceso a Nagios:\033[0m"
+            echo -e "   ► URL: \033[1;34m$URL\033[0m"
+            echo -e "   ► Usuario: \033[1;32mnagiosadmin\033[0m"
+            echo -e "   ► Contraseña: \033[1;33m[la que configuraste durante instalación]\033[0m\n"
+
+            # 3. Intenta abrir automáticamente (multi-plataforma)
+            if [ -n "$DISPLAY" ]; then
+                echo "Intentando abrir en tu navegador..."
+                xdg-open "$URL" 2>/dev/null || \
+                gnome-open "$URL" 2>/dev/null || \
+                kde-open "$URL" 2>/dev/null || \
+                python3 -m webbrowser "$URL" 2>/dev/null
+            else
+                echo "ℹ️  Ejecuta desde entorno gráfico o accede manualmente con la URL"
+            fi
+
+            # 4. Soporte para WSL (Windows Subsystem for Linux)
+            if grep -qi microsoft /proc/version; then
+                echo "Detectado WSL. Abriendo en Windows..."
+                cmd.exe /c start "$URL" 2>/dev/null
+            fi
+            ;;
+        4)
+            # Reinicio existente (sin cambios)
+            sudo systemctl restart nagios apache2
+            echo "✔ Servicios reiniciados"
+            registrar_log "Nagios: reinicio de servicios"
+            ;;
+        5)
+            return
+            ;;
+        *)
+            echo "Opción inválida"
+            ;;
+    esac
+    
+    # Pausa para leer mensajes (excepto cuando se abre navegador)
+    [ "$opcion" != "3" ] && read -p "Presione Enter para continuar..."
+}
+    
+
+monitoreo_red() {
+    mostrar_encabezado
+    echo "--- MONITOREO DE RED ---"
+    echo "1. iftop (tráfico en tiempo real)"
+    echo "2. vnstat (estadísticas)"
+    echo "3. nmap (escaneo de red) automatico"
+    echo "4. nmap (escaneo de red) manual"
+    echo "5. Volver"
+    read -p "Seleccione [1-4]: " opcion
+
+    case $opcion in
+        1)
+	 # Usar automáticamente la interfaz WiFi activa
+                INTERFAZ=$(ip link | grep -E 'wlp|wlan' | awk -F': ' '{print $2}' | head -1)
+
+                if [ -z "$INTERFAZ" ]; then
+                    echo " No se encontró interfaz WiFi activa"
+                    echo "Interfaces disponibles:"
+                    ip link | awk -F': ' '/^[0-9]/ {print $2}'
+                    return 1
+                fi
+
+                echo " Monitoreando tráfico WiFi en $INTERFAZ (Ctrl+C para salir)..."
+                sudo iftop -i $INTERFAZ -n -N -P
+		;;
+        2)
+            apt-get install -y vnstat
+	    echo "Estadísticas de red:"
+            vnstat -d
+            registrar_log "Consultado estadísticas con vnstat"
+
+	    echo -e "\nResumen mensual:"
+            sudo vnstat -m
+
+	    ;;
+        3)
+            apt-get install -y nmap
+            # Obtener automáticamente la subred basada en la IP local
+	    SUBNET=$(ip -o -f inet addr show | awk '/scope global/ {print $4}' | cut -d'/' -f1 | awk -F. '{print $1"."$2"."$3".0/24"}')
+
+	    echo "Escaneando subred $SUBNET..."
+	    echo ""
+	    sudo nmap -sn $target | grep "report for"
+            ;;
+
+
+	4)
+	   apt-get install -y nmap
+
+    	   # Mostrar la IP local como sugerencia
+    	   LOCAL_IP=$(hostname -I | awk '{print $1}')
+    	   echo "Interfaces de red disponibles:"
+    		ip -o link show | awk '{print $2,$9}'
+    	   echo "Ruta de red:"
+   	 	ip route
+	   echo ""
+	   read -p "Ingrese rango de IP (ej: $LOCAL_IP/24 o 192.168.1.1-100): " target
+    	   [ -z "$target" ] && target="$LOCAL_IP/24"  # Valor por defecto si no se ingresa nada
+    	   echo "Escaneando dispositivos..."
+   	   sudo nmap -sn $target | grep "report for"
+
+	   ;;
+        5)
+		break
+		;;
+	*)
+            echo "Opción inválida"
+           ;;
+ 	   esac
+}
+
+wireshark_nmap() {
+    mostrar_encabezado
+    echo "--- HERRAMIENTAS DE SEGURIDAD ---"
+    echo "1. Abrir Wireshark"
+    echo "2. Abrir Nmap (escaneo basico)"
+    echo "3. Capturar tráfico con tshark"
+    echo "4. Escaneo avanzado con nmap"
+    echo "5. Analizar captura con wireshark"
+    read -p "Seleccione [1-5]: " opcion
+
+    case $opcion in
+        1)
+	#Instalar Wireshark
+	    if ! command -v wireshark &> /dev/null; then
+                echo "Instalando Wireshark..."
+                sudo apt-get install -y wireshark
+                sudo dpkg-reconfigure wireshark-common -f noninteractive
+                sudo usermod -aG wireshark $USER
+                echo "Wireshark instalado... ✔"
+                echo "Reinicie sesión para usar sin sudo"
+                registrar_log "Wireshark instalado"
+            else
+                echo "Wireshark ya está instalado"
+            fi
+
+	  # Abrir Wireshark automáticamente
+            if [ -f "/usr/bin/wireshark" ]; then
+                echo "Abriendo Wireshark..."
+                wireshark &
+                registrar_log "Wireshark iniciado"
+            else
+                echo "Error: Wireshark no se pudo abrir"
+            fi
+            ;;
+
+
+	2)
+	  # Instalación de Nmap
+            if ! command -v nmap &> /dev/null; then
+                echo "Instalando Nmap..."
+                sudo apt-get install -y nmap
+                echo "Nmap instalado... ✔"
+                registrar_log "Nmap instalado"
+            else
+                echo "Nmap ya está instalado"
+            fi
+
+            # Ejecutar escaneo básico automáticamente
+            echo "Ejecutando Nmap..."
+
+            # Obtener subred automáticamente
+            SUBNET=$(ip -o -f inet addr show | awk '/scope global/ {print $4}' | cut -d'/' -f1 | awk -F. '{print $1"."$2"."$3".0/24"}')
+            echo "Escaneando la subred local $SUBNET..."
+
+            sudo nmap -sn "$SUBNET" | grep "report for"
+            echo "Escaneo básico completado"
+
+            # Mostrar opciones avanzadas
+            echo -e "\nPuede usar opciones avanzadas en el menú principal:"
+            echo "- Escaneo de puertos (Opción 4)"
+            echo "- Detección de servicios y OS (Opción 4)"
+            registrar_log "Escaneo básico de Nmap ejecutado en $SUBNET"
+            ;;
+
+
+	3)
+	 # Verificar si tshark está instalado
+            if ! command -v tshark &> /dev/null; then
+                echo "tshark no encontrado. Instalando..."
+                sudo apt-get install -y tshark
+            fi
+
+            read -p "Duración (segundos): " tiempo
+            [ -z "$tiempo" ] && tiempo=30  # Valor por defecto
+
+            # Obtener interfaz de red automáticamente
+            INTERFAZ=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | head -1)
+            ARCHIVO_CAPTURA="$BACKUP_DIR/captura_$(date +%Y%m%d_%H%M%S).pcap"
+
+            echo "Iniciando captura en la interfaz $INTERFAZ por $tiempo segundos..."
+            tshark -i "$INTERFAZ" -a duration:"$tiempo" -w "$ARCHIVO_CAPTURA"
+
+            echo "Captura guardada en: $ARCHIVO_CAPTURA ✔"
+            registrar_log "Captura de tráfico realizada ($tiempo segundos) - $ARCHIVO_CAPTURA"
+
+            # Preguntar si desea abrir la captura en Wireshark
+            read -p "¿Desea abrir la captura en Wireshark? [s/N]: " abrir
+            if [[ "$abrir" =~ ^[sSyY].* ]]; then
+                wireshark "$ARCHIVO_CAPTURA" &
+            fi
+            ;;
+
+
+
+        4)
+	 # Verificar si nmap está instalado
+            if ! command -v nmap &> /dev/null; then
+                echo "nmap no encontrado. Instalando..."
+                sudo apt-get install -y nmap
+            fi
+
+            # Obtener subred automáticamente como sugerencia
+            SUBNET=$(ip -o -f inet addr show | awk '/scope global/ {print $4}' | cut -d'/' -f1 | awk -F. '{print $1"."$2"."$3".0/24"}')
+
+            echo -e "\nOpciones de escaneo avanzado:"
+            echo "1) Escaneo de puertos (-sS)"
+            echo "2) Detección de servicios (-sV)"
+            echo "3) Detección de OS (-O)"
+            echo "4) Escaneo completo (-A)"
+            read -p "Seleccione tipo de escaneo [1-4]: " escaneo_op
+
+            read -p "Objetivo (IP/rango) [por defecto $SUBNET]: " target
+            [ -z "$target" ] && target="$SUBNET"
+
+            case $escaneo_op in
+                1) COMANDO="sudo nmap -sS -T4 $target" ;;
+                2) COMANDO="sudo nmap -sV -T4 $target" ;;
+                3) COMANDO="sudo nmap -O -T4 $target" ;;
+                4) COMANDO="sudo nmap -A -T4 $target" ;;
+                *) COMANDO="sudo nmap -A -T4 $target" ;;
+            esac
+
+            echo "Ejecutando: $COMANDO"
+            $COMANDO
+            registrar_log "Escaneo avanzado con nmap: $COMANDO"
+            ;;
+
+	5)
+	 # Analizar capturas existentes
+            echo "Capturas disponibles en $BACKUP_DIR:"
+            ls -lt "$BACKUP_DIR"/*.pcap 2>/dev/null | head -5
+
+            read -p "Nombre del archivo .pcap a analizar: " archivo
+            if [ -f "$BACKUP_DIR/$archivo" ]; then
+                wireshark "$BACKUP_DIR/$archivo" &
+                registrar_log "Analizando captura: $archivo"
+            elif [ -f "$archivo" ]; then
+                wireshark "$archivo" &
+                registrar_log "Analizando captura: $archivo"
+            else
+                echo "Error: Archivo no encontrado"
+            fi
+            ;;
+
+        *)
+            echo "Opción inválida"
+            ;;
+    esac
+}
+
+#_______________________________________________________________________________
+#
+# 				MENÚ PRINCIPAL
+#_______________________________________________________________________________
+
+menu_principal() {
+    while true; do
+        mostrar_encabezado
+        echo "1. Gestión de Usuarios"
+        echo "2. Gestión de Grupos"
+        echo "3. Automatización de Tareas"
+        echo "4. Respaldo de Información"
+        echo "5. Seguridad y Monitoreo"
+        echo "6. Salir"
+        read -p "Seleccione [1-6]: " opcion
+
+        case $opcion in
+            1)
+                while true; do
+                    mostrar_encabezado
+                    echo "--- GESTIÓN DE USUARIOS ---"
+                    echo "1. Alta de usuario"
+                    echo "2. Baja de usuario"
+                    echo "3. Consulta de usuario"
+                    echo "4. Modificación de usuario"
+                    echo "5. Volver"
+                    read -p "Seleccione [1-5]: " subop
+
+                    case $subop in
+                        1) alta_usuario ;;
+                        2) baja_usuario ;;
+                        3) consulta_usuario ;;
+                        4) modificar_usuario ;;
+                        5) break ;;
+                        *) echo "Opción inválida" ;;
+                    esac
+                    read -p "Presione Enter para continuar..."
+                done
+                ;;
+            2)
+                while true; do
+                    mostrar_encabezado
+                    echo "--- GESTIÓN DE GRUPOS ---"
+                    echo "1. Alta de grupo"
+                    echo "2. Baja de grupo"
+                    echo "3. Consulta de grupo"
+                    echo "4. Modificación de grupo"
+                    echo "5. Volver"
+                    read -p "Seleccione [1-5]: " subop
+
+                    case $subop in
+                        1) alta_grupo ;;
+                        2) baja_grupo ;;
+                        3) consulta_grupo ;;
+                        4) modificar_grupo ;;
+                        5) break ;;
+                        *) echo "Opción inválida" ;;
+                    esac
+                    read -p "Presione Enter para continuar..."
+                done
+                ;;
+            3)
+                while true; do
+                    mostrar_encabezado
+                    echo "--- AUTOMATIZACIÓN DE TAREAS ---"
+                    echo "1. Programación con Cron"
+                    echo "2. Programación con At"
+                    echo "3. Volver"
+                    read -p "Seleccione [1-3]: " subop
+
+                    case $subop in
+                        1) gestion_cron ;;
+                        2) gestion_at ;;
+                        3) break ;;
+                        *) echo "Opción inválida" ;;
+                    esac
+                    read -p "Presione Enter para continuar..."
+                done
+                ;;
+            4)
+                while true; do
+                    mostrar_encabezado
+                    echo "--- RESPALDO DE INFORMACIÓN ---"
+                    echo "1. Rsync"
+                    echo "2. Compresores (tar)"
+                    echo "3. Dump/Restore"
+                    echo "4. Volver"
+                    read -p "Seleccione [1-4]: " subop
+
+                    case $subop in
+                        1) respaldo_rsync ;;
+                        2) respaldo_tar ;;
+                        3) dump_restore ;;
+                        4) break ;;
+                        *) echo "Opción inválida" ;;
+                    esac
+                    read -p "Presione Enter para continuar..."
+                done
+                ;;
+            5)
+                while true; do
+                    mostrar_encabezado
+                    echo "--- SEGURIDAD Y MONITOREO ---"
+                    echo "1. Configurar Nagios"
+                    echo "2. Monitoreo de Red"
+                    echo "3. Wireshark/Nmap"
+                    echo "4. Volver"
+                    read -p "Seleccione [1-4]: " subop
+
+                    case $subop in
+                        1) configurar_nagios ;;
+                        2) monitoreo_red ;;
+                        3) wireshark_nmap ;;
+                        4) break ;;
+                        *) echo "Opción inválida" ;;
+                    esac
+                    read -p "Presione Enter para continuar..."
+                done
+                ;;
+            6)
+                echo "Saliendo del sistema..."
+                registrar_log "Sesión administrativa finalizada"
+                exit 0
+                ;;
+            *)
+                echo "Opción inválida"
+                read -p "Presione Enter para continuar..."
+                ;;
+        esac
+    done
+}
+
+#________________________________________________________________________________
+#
+#					 INICIO
+#________________________________________________________________________________
+
+inicializar_entorno
+registrar_log "Inicio de sesión administrativa"
+menu_principal
