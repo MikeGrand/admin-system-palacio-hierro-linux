@@ -1,2 +1,20 @@
 # admin-system-palacio-hierro-linux
-Sistema integral de administración para entornos Linux orientado a retail. Incluye gestión de usuarios y grupos, automatización de tareas con cron y at, respaldos, monitoreo de red, seguridad y soporte para herramientas como Nagios, rsync, MySQL, Nmap y Wireshark.
+Palacio de Hierro – Versión 3.0
+
+Este proyecto consiste en un script avanzado en Bash diseñado para la administración integral de infraestructura Linux dentro de un entorno empresarial simulado del Palacio de Hierro.
+
+El sistema automatiza tareas críticas de administración como:
+
+Gestión de usuarios y grupos
+
+Programación de tareas automáticas
+
+Respaldos y recuperación de información
+
+Administración de bases de datos
+
+Monitoreo de red y seguridad
+
+Integración con herramientas profesionales (Nagios, Nmap, Wireshark, rsync, cron, at)
+
+El objetivo del proyecto es centralizar funciones administrativas en una interfaz estructurada por menús, permitiendo una gestión eficiente, segura y organizada del sistema.
