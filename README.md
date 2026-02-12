@@ -194,3 +194,100 @@ Permite:
 - Mostrar tablas restauradas
 
 Esto garantiza continuidad operativa ante fallos.
+
+Seguridad y Monitoreo
+
+## Nagios 4
+
+Permite:
+
+- Configuración automática de monitoreo de cajas registradoras
+
+- Configuración de servidores
+
+- Validación de sintaxis de configuración
+
+- Reinicio automático de servicios
+
+- Apertura automática de interfaz web
+
+- Compatibilidad con entornos gráficos y WSL
+
+## Monitoreo de Red
+
+- Incluye herramientas como:
+
+- iftop → tráfico en tiempo real
+
+- vnstat → estadísticas históricas
+
+- nmap → escaneo automático y manual de red
+
+- Detecta automáticamente la subred local para simplificar el uso.
+
+Herramientas de Seguridad Avanzadas
+Wireshark
+
+Instalación automática
+
+Apertura directa desde el script
+
+## Tshark
+
+- Captura de tráfico con duración personalizada
+
+- Guardado automático en carpeta de respaldos
+
+- Posibilidad de abrir captura inmediatamente
+
+- Nmap Avanzado
+
+Opciones:
+
+- Escaneo de puertos
+
+- Detección de servicios
+
+- Detección de sistema operativo
+
+- Escaneo completo (-A)
+
+## Menú Interactivo
+
+El sistema funciona mediante un menú estructurado y jerárquico:
+
+- Gestión de Usuarios
+
+- Gestión de Grupos
+
+- Automatización
+
+- Respaldos
+
+- Seguridad y Monitoreo
+
+Cada sección tiene submenús organizados para facilitar la navegación.
+
+## Características Técnicas Destacadas
+
+- Uso avanzado de Bash scripting
+
+- Control de errores y validaciones
+
+- Automatización empresarial realista
+
+- Integración con herramientas profesionales Linux (Alma Linux)
+
+- Registro de eventos (auditoría)
+
+- Estructura modular por funciones
+
+- Compatibilidad con entornos gráficos y consola
+
+## Cada acción administrativa queda registrada en:
+
+/var/log/ph_admin.log
+
+## Formato:
+
+[YYYY-MM-DD HH:MM:SS] [PALACIO-DEPARTAMENTO] Acción realizada
