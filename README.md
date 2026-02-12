@@ -98,3 +98,61 @@ Modificación que permite:
 - Cambiar grupo principal
 
 - Actualizar puesto
+
+## Gestión de Grupos
+
+El sistema administra grupos empresariales personalizados:
+
+- Alta de grupo
+
+- Baja de grupo
+
+- Consulta de miembros
+
+Modificación:
+
+- Agregar usuario
+
+- Quitar usuario
+
+- Cambiar nombre del grupo
+
+Esto permite segmentar privilegios y mantener un control estructurado de accesos.
+
+## Automatización de Tareas
+
+🔹 Cron (Tareas Periódicas)
+
+- Permite programar automáticamente:
+
+- Respaldos diarios (2 AM)
+
+- Verificación de inventario (3 AM)
+
+- Reporte de ventas (10 PM)
+
+- Programación manual personalizada
+
+También permite:
+
+- Visualizar tareas activas
+
+- Eliminar tareas por número de línea
+
+🔹 AT (Tareas Puntuales)
+
+- Permite programar tareas únicas como:
+
+- Respaldos urgentes
+
+- Reinicio de servicios
+
+- Actualizaciones del sistema
+
+- Ejecución de comandos personalizados
+
+Incluye:
+
+- Consulta de tareas pendientes
+
+- Cancelación por ID
