@@ -42,3 +42,59 @@ Define rutas y variables base como:
 - Dominio empresarial (ph.local)
 
 Además, valida que el script sea ejecutado únicamente por el usuario root, garantizando permisos adecuados para operaciones críticas del sistema.
+
+## Gestión de Usuarios
+
+El sistema permite una administración completa del ciclo de vida del usuario:
+
+- Alta de Usuario
+
+- Creación automática con useradd
+
+Asignación dinámica de grupos según el puesto:
+
+- vendedor / cajero → ph_ventas
+
+- gerente → ph_admin, ph_ventas
+
+- sistemas → ph_admin, ph_soporte
+
+- Configuración de fecha de caducidad
+
+- Creación de directorio home
+
+- Asignación obligatoria de contraseña
+
+- Registro automático en archivo de logs
+
+- Baja de Usuario
+
+- Eliminación opcional del directorio home
+
+- Registro del evento administrativo
+
+- Consulta
+
+Muestra:
+
+- Información del usuario (finger)
+
+- Grupos asociados
+
+- Fecha de expiración
+
+- Procesos activos
+
+- Último login
+
+Modificación que permite:
+
+- Cambiar fecha de caducidad
+
+- Modificar directorio home
+
+- Bloquear/desbloquear cuenta
+
+- Cambiar grupo principal
+
+- Actualizar puesto
