@@ -156,3 +156,41 @@ Incluye:
 - Consulta de tareas pendientes
 
 - Cancelación por ID
+
+## Sistema de Respaldos
+
+El script incluye múltiples métodos de respaldo:
+
+🔹 Rsync
+
+- Copia incremental
+
+- Ideal para sincronización eficiente
+
+🔹 Tar con compresión
+
+Opciones disponibles:
+
+- gzip (rápido)
+
+- bzip2 (balanceado)
+
+- xz (máxima compresión)
+
+Genera archivos con timestamp automático.
+
+# Dump y Restore (MySQL)
+
+Permite:
+
+- Crear dumps de bases de datos existentes
+
+- Restaurar bases desde archivos .sql
+
+- Validar existencia de base de datos
+
+- Crear base si no existe
+
+- Mostrar tablas restauradas
+
+Esto garantiza continuidad operativa ante fallos.
